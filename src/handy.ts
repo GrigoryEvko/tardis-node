@@ -1,7 +1,8 @@
 import crypto, { createHash } from 'crypto'
 import { createWriteStream, ensureDirSync, rename, removeSync } from 'fs-extra'
-import https, { RequestOptions } from 'https'
-import createHttpsProxyAgent from 'https-proxy-agent'
+import { RequestOptions, Agent } from 'https'
+import { https } from 'follow-redirects'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 import got, { ExtendOptions } from 'got'
 import path from 'path'
 import { debug } from './debug'
@@ -241,9 +242,9 @@ const httpsAgent = new https.Agent({
   maxSockets: 120
 })
 
-export const httpsProxyAgent: https.Agent | undefined =
+export const httpsProxyAgent: Agent | undefined =
   process.env.HTTP_PROXY !== undefined
-    ? createHttpsProxyAgent(process.env.HTTP_PROXY)
+    ? new HttpsProxyAgent(process.env.HTTP_PROXY)
     : process.env.SOCKS_PROXY !== undefined
     ? new SocksProxyAgent(process.env.SOCKS_PROXY)
     : undefined
@@ -276,12 +277,18 @@ export async function download({
     // simple retry logic when fetching from the network...
     attempts++
     try {
-      return await _downloadFile(httpRequestOptions, url, downloadPath)
+      const addRetryAttempt = attempts - 1 > 0 && url.endsWith('gz')
+      if (addRetryAttempt) {
+        return await _downloadFile(httpRequestOptions, `${url}?retryAttempt=${attempts - 1}`, downloadPath)
+      } else {
+        return await _downloadFile(httpRequestOptions, url, downloadPath)
+      }
     } catch (error) {
       const badOrUnauthorizedRequest =
         error instanceof HttpError &&
         ((error.status === 400 && error.message.includes('ISO 8601 format') === false) || error.status === 401)
       const tooManyRequests = error instanceof HttpError && error.status === 429
+      const internalServiceError = error instanceof HttpError && error.status === 500
       // do not retry when we've got bad or unauthorized request or enough attempts
       if (badOrUnauthorizedRequest || attempts === MAX_ATTEMPTS) {
         throw error
@@ -294,6 +301,9 @@ export async function download({
       if (tooManyRequests) {
         // when too many requests received wait one minute
         nextAttemptDelayMS += 60 * ONE_SEC_IN_MS
+      }
+      if (internalServiceError) {
+        nextAttemptDelayMS = nextAttemptDelayMS * 2
       }
 
       debug('download file error: %o, next attempt delay: %d, url %s, path: %s', error, nextAttemptDelayMS, url, downloadPath)
@@ -416,7 +426,7 @@ export class CappedSet<T> {
 
   public add(value: T) {
     if (this._set.size >= this._maxSize) {
-      this._set.delete(this._set.keys().next().value)
+      this._set.delete(this._set.keys().next().value!)
     }
     this._set.add(value)
   }
