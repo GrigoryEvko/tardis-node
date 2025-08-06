@@ -6,6 +6,23 @@ import { addDays, doubleDigit, download, parseAsUTCDate, sequence } from './hand
 import { getOptions } from './options'
 import { Exchange } from './types'
 
+// Custom function to check if file exists in either .csv.gz or .parquet format
+function checkFileExistsWithParquet(filepath: string): boolean {
+    // Check for original .csv.gz file
+    if (existsSync(filepath)) {
+        return true
+    }
+    
+    // Check for .parquet version (replace .csv.gz with .parquet)
+    const parquetPath = filepath.replace('.csv.gz', '.parquet')
+    if (existsSync(parquetPath)) {
+        debug('found parquet version: %s', parquetPath)
+        return true
+    }
+    
+    return false
+}
+
 const DEFAULT_CONCURRENCY_LIMIT = 20
 const MILLISECONDS_IN_SINGLE_DAY = 24 * 60 * 60 * 1000
 const DEFAULT_DOWNLOAD_DIR = './datasets'
@@ -204,9 +221,9 @@ async function downloadDatasetsFullyAsync(options: {
             })
 
             try {
-                if (skipIfExists && existsSync(downloadOptions.downloadPath)) {
+                if (skipIfExists && checkFileExistsWithParquet(downloadOptions.downloadPath)) {
                     skipped++
-                    debug('dataset %s already exists, skipping download', downloadOptions.downloadPath)
+                    debug('dataset %s already exists (csv.gz or parquet), skipping download', downloadOptions.downloadPath)
 
                     if (onProgress) {
                         onProgress({
@@ -322,8 +339,8 @@ function generateDownloadTasks(options: {
 }
 
 async function downloadDataSet(downloadOptions: DownloadOptions, skipIfExists: boolean): Promise<{ downloaded?: boolean; skipped?: boolean }> {
-    if (skipIfExists && existsSync(downloadOptions.downloadPath)) {
-        debug('dataset %s already exists, skipping download', downloadOptions.downloadPath)
+    if (skipIfExists && checkFileExistsWithParquet(downloadOptions.downloadPath)) {
+        debug('dataset %s already exists (csv.gz or parquet), skipping download', downloadOptions.downloadPath)
         return { skipped: true }
     } else {
         // Ensure directory exists before download
